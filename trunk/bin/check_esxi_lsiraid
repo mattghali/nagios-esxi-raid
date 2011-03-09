@@ -1,0 +1,179 @@
+#!/usr/bin/env python
+
+import os
+import socket
+import sys
+import time
+
+clicmd = '/bin/megacli'
+
+class Host(object):
+    def __init__(self):
+        self.hostname = socket.gethostname()
+
+        try:
+            cli = os.popen("%s -AdpAllInfo -aALL" % clicmd)
+        except Exception, e:
+            print "Error running megacli: %s" % e
+            sys.exit(1)
+
+        self.controllers = []
+        for line in cli.readlines():
+            l = line.split()
+            if len(l) > 0 and l[0] == 'Adapter':
+                self.controllers.append(Controller(l[1]))
+                break
+        cli.close()
+
+    def __str__(self):
+        return "Host %s containing %s" % (self.hostname, ', '.join([str(a) for a in self.controllers]))
+
+    def has_errors(self):
+        for controller in self.controllers:
+            if controller.has_errors():
+                return True
+            else: return False
+
+    def has_warnings(self):
+        for controller in self.controllers:
+            if controller.has_warnings():
+                return True
+            else: return False
+
+    def get_errors(self): 
+        for controller in self.controllers:
+            if controller.has_errors():
+                errstr = ', controller '.join(controller.errlist)
+                errstr = "LSI controller %s" % errstr
+        return errstr
+
+    def get_warnings(self): 
+        for controller in self.controllers:
+            if controller.has_warnings():
+                errstr = ', controller '.join(controller.warnlist)
+                errstr = "LSI controller %s" % errstr
+        return errstr
+
+class Controller(object):
+    def __init__(self ,name):
+        self.name = name
+
+        try:
+            cli = os.popen("%s -ShowSummary -a%s" % (clicmd, self.name))
+        except Exception, e:
+            print "Error running megacli: %s" % e
+            sys.exit(1)
+
+        status = []
+        for line in cli.readlines():
+            if '\r' not in line and line != '\n': status.append(line[:-1])
+        cli.close()
+
+        headings = ['Hardware', 'BBU', 'Enclosure', 'PD', 'Storage']
+        subheads = ['Controller', 'Connector', 'State', 'Virtual Drives']
+        (heading, subhead) = ('', '')
+        res = []
+        
+        for line in status:
+            l = line.split(':')
+            l = [ s.strip() for s in l]
+            if len(l) == 1:
+                if l[0] in headings:
+                    heading = l[0]
+                if l[0] in subheads:
+                    subhead = l[0]
+            else:
+                if heading and subhead:
+                    res.append([heading, subhead] + l)
+
+        (contstat, bbustat, encstat, pdstat, vdstat) = ([], [], [], [], [])
+        for l in res:
+            if l[0:3] == ['Hardware', 'Controller', 'Status']:
+                contstat.append((' '.join(l[0:3]), l[3]))
+
+            if l[0:3] == ['BBU', 'Controller', 'Status']:
+                bbustat.append((' '.join(l[0:3]), l[3]))
+
+            if l[0:3] == ['Enclosure', 'Controller', 'Status']:
+                encstat.append((' '.join(l[0:3]), l[3]))
+
+            if l[0:3] == ['PD', 'Controller', 'Connector']:
+                slot = l[4]
+            if l[0:3] == ['PD', 'Controller', 'State']:
+                pdstat.append((slot, l[3]))
+
+            if l[0:3] == ['Storage', 'Virtual Drives', 'Virtual drive']:
+                id = l[3].split(' ,')[0]
+            if l[0:3] == ['Storage', 'Virtual Drives', 'State']:
+                vdstat.append((id, l[3]))
+
+        (self.errlist, self.warnlist) = ([], [])
+        for unit in contstat:
+            if unit[1] != 'Optimal':
+                if unit[1] == 'foo':
+                    self.warnlist.append("controller %s %s is %s" % (self.name, unit[0], unit[1]))
+                else:
+                    self.errlist.append("controller %s %s is %s" % (self.name, unit[0], unit[1]))
+
+        if check_bbu:
+            for bbu in bbustat:
+                if bbu[1] != 'Healthy': self.errlist.append("%s BBU %s" % (self.name, bbu[1]))
+
+        for enc in encstat:
+            if enc[1] != 'OK':
+                self.errlist.append("%s enclosure %s is %s" % (self.name, enc[0], enc[1]))
+
+        for pd in pdstat:
+            if pd[1] != 'Online':
+                self.errlist.append("%s disk %s is %s" % (self.name, pd[0], pd[1]))
+                
+        for vd in vdstat:
+            if vd[1] != 'Optimal':
+                self.errlist.append("%s volume %s is %s" % (self.name, vd[0], vd[1]))
+
+
+    def __str__(self): return "LSI Controller %s" % self.name
+
+    def has_errors(self): 
+        if len(self.errlist) == 0: return False
+        else: return True
+
+    def has_warnings(self): 
+        if len(self.warnlist) == 0: return False
+        else: return True
+
+
+if __name__ == '__main__':
+    (check_bbu, debug) = (True, False)
+
+    if len(sys.argv) > 1:
+        if '-b' in sys.argv:
+            check_bbu = False
+        if '-i' in sys.argv:
+            i = sys.argv.index('-i')
+            interval = int(sys.argv[i + 1])
+        if '-d' in sys.argv:
+            debug = True
+
+    server = Host()
+    if len(server.controllers) == 0:
+        print "CRIT: %s found no raid controllers." % server.hostname
+        sys.exit(2)
+
+    if debug: print server
+
+    if server.has_errors():
+        errstr = server.get_errors()
+        print "CRIT: %s" % errstr
+        if not debug: sys.exit(2)
+
+    if server.has_warnings():
+        errstr = server.get_warnings()
+        print "WARN: %s" % errstr
+        if not debug: sys.exit(1)
+
+    if server.has_errors(): sys.exit(2)
+    if server.has_warnings(): sys.exit(1)
+    print "OK: %s" %  server
+    sys.exit(0)
+

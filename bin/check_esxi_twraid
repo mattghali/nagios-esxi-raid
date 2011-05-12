@@ -91,7 +91,8 @@ class Controller(object):
 
         for port in portstat:
             if port[1] != 'OK' and port[1] != 'NOT-PRESENT':
-                self.errlist.append("%s port %s is %s" % (self.name, port[0], port[1]))
+                if not ( port[1] == 'ECC-ERROR' and ignore_ecc ):
+                    self.errlist.append("%s port %s is %s" % (self.name, port[0], port[1]))
 
         if check_bbu:
             if bbustat == []:
@@ -112,13 +113,15 @@ class Controller(object):
 
 
 if __name__ == '__main__':
-    (check_bbu, debug) = (True, False)
+    (check_bbu, debug, ignore_ecc) = (True, False, False)
 
     if len(sys.argv) > 1:
         if '-b' in sys.argv:
             check_bbu = False
         if '-d' in sys.argv:
             debug = True
+        if '-e' in sys.argv:
+            ignore_ecc = True
 
     server = Host()
     if len(server.controllers) == 0:
